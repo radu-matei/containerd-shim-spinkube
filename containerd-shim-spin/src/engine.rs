@@ -64,15 +64,22 @@ impl std::fmt::Debug for AppSource {
 
 impl SpinEngine {
     async fn app_source(&self, ctx: &impl RuntimeContext, cache: &Cache) -> Result<AppSource> {
-        match ctx.wasm_layers() {
-            [] => Ok(AppSource::File(
-                spin_common::paths::resolve_manifest_file_path("/spin.toml")?,
-            )),
-            layers => {
-                info!(
-                    " >>> configuring spin oci application {}",
-                    ctx.wasm_layers().len()
+        match ctx.entrypoint().source {
+            containerd_shim_wasm::container::Source::File(f) => {
+                log::warn!(
+                    ">>> attempting to load a spin application from a local file {:?}",
+                    f
                 );
+
+                Ok(AppSource::File(f))
+            }
+            containerd_shim_wasm::container::Source::Oci(layers) => {
+                info!(" >>> configuring spin oci application {}", layers.len());
+                // log::info!("<<< first layer {:?}", layers[0].config);
+
+                for layer in layers {
+                    log::info!("<<< layer config: {:?}", layer.config);
+                }
 
                 for artifact in layers {
                     match artifact.config.media_type() {
@@ -85,14 +92,13 @@ impl SpinEngine {
                                 .context("failed to create spin.json")?
                                 .write_all(&artifact.layer)
                                 .context("failed to write spin.json")?;
-                            let lockfile = std::str::from_utf8(&artifact.layer)?;
-                            log::info!("lockfile: {:?}", lockfile);
+                            log::debug!("<<< loading Spin lockfile");
                         }
                         MediaType::Other(name)
                             if name == "application/vnd.wasm.content.layer.v1+wasm" =>
                         {
                             log::info!(
-                                "writing artifact config to cache, near {:?}",
+                                "<<< writing artifact config to cache, near {:?}",
                                 cache.manifests_dir()
                             );
                             cache
@@ -103,14 +109,16 @@ impl SpinEngine {
                             if name == "application/vnd.wasm.content.layer.v1+data" =>
                         {
                             log::info!(
-                                "writing data layer to cache, near {:?}",
+                                "<<< writing data layer to cache, near {:?}",
                                 cache.manifests_dir()
                             );
                             cache
                                 .write_data(&artifact.layer, &artifact.config.digest())
                                 .await?;
                         }
-                        _ => {}
+                        _ => {
+                            log::info!("<<< unknown media type {:?}", artifact.config.media_type());
+                        }
                     }
                 }
                 Ok(AppSource::Oci)
@@ -141,6 +149,8 @@ impl SpinEngine {
                 ResolvedAppSource::OciRegistry { locked_app }
             }
         };
+        log::info!("<<< resolved app source: {:?}", resolve_app_source);
+
         Ok(resolve_app_source)
     }
 
@@ -268,7 +278,7 @@ impl Engine for SpinEngine {
 
     fn run_wasi(&self, ctx: &impl RuntimeContext, stdio: Stdio) -> Result<i32> {
         stdio.redirect()?;
-        info!("setting up wasi");
+        info!(">>> setting up wasi");
         let rt = Runtime::new().context("failed to create runtime")?;
         rt.block_on(self.wasm_exec_async(ctx))?;
         Ok(0)
@@ -276,6 +286,18 @@ impl Engine for SpinEngine {
 
     fn can_handle(&self, _ctx: &impl RuntimeContext) -> Result<()> {
         Ok(())
+    }
+
+    fn supported_layers_types() -> &'static [&'static str] {
+        &[
+            "application/vnd.wasm.content.layer.v1+wasm",
+            "application/vnd.wasm.content.layer.v1+data",
+            "application/vnd.fermyon.spin.application.v1+config",
+        ]
+    }
+
+    fn can_precompile(&self) -> Option<String> {
+        None
     }
 }
 
@@ -288,6 +310,7 @@ fn parse_addr(addr: &str) -> Result<SocketAddr> {
 }
 
 // TODO: we should use spin's ResolvedAppSource
+#[derive(Debug)]
 pub enum ResolvedAppSource {
     File {
         manifest_path: PathBuf,
