@@ -6,7 +6,8 @@ use spin_app::locked::LockedApp;
 use spin_loader::cache::Cache;
 use spin_loader::FilesMountStrategy;
 use spin_manifest::schema::v2::AppManifest;
-use spin_redis_engine::RedisTrigger;
+use spin_telemetry::{ServiceDescription, ShutdownGuard};
+// use spin_redis_engine::RedisTrigger;
 use spin_trigger::TriggerHooks;
 use spin_trigger::{loader, RuntimeConfig, TriggerExecutor, TriggerExecutorBuilder};
 use spin_trigger_http::HttpTrigger;
@@ -18,7 +19,7 @@ use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use tokio::runtime::Runtime;
-use trigger_sqs::SqsTrigger;
+// use trigger_sqs::SqsTrigger;
 use url::Url;
 
 const SPIN_ADDR: &str = "0.0.0.0:80";
@@ -143,6 +144,15 @@ impl SpinEngine {
     }
 
     async fn wasm_exec_async(&self, ctx: &impl RuntimeContext) -> Result<()> {
+        let _guard = match SpinEngine::init_telemetry() {
+            Ok(g) => g,
+
+            Err(err) => {
+                log::info!("Panic at the disco: {:?}", err);
+                todo!("err: {:?}", err)
+            }
+        };
+
         // create a cache directory at /.cache
         // this is needed for the spin LocalLoader to work
         // TODO: spin should provide a more flexible `loader::from_file` that
@@ -175,24 +185,24 @@ impl SpinEngine {
                     tls_key: None,
                 })
             }
-            RedisTrigger::TRIGGER_TYPE => {
-                let redis_trigger: RedisTrigger = self
-                    .build_spin_trigger(working_dir, app)
-                    .await
-                    .context("failed to build spin trigger")?;
-
-                info!(" >>> running spin trigger");
-                redis_trigger.run(spin_trigger::cli::NoArgs)
-            }
-            SqsTrigger::TRIGGER_TYPE => {
-                let sqs_trigger: SqsTrigger = self
-                    .build_spin_trigger(working_dir, app)
-                    .await
-                    .context("failed to build spin trigger")?;
-
-                info!(" >>> running spin trigger");
-                sqs_trigger.run(spin_trigger::cli::NoArgs)
-            }
+            // RedisTrigger::TRIGGER_TYPE => {
+            //     let redis_trigger: RedisTrigger = self
+            //         .build_spin_trigger(working_dir, app)
+            //         .await
+            //         .context("failed to build spin trigger")?;
+            //
+            //     info!(" >>> running spin trigger");
+            //     redis_trigger.run(spin_trigger::cli::NoArgs)
+            // }
+            // SqsTrigger::TRIGGER_TYPE => {
+            //     let sqs_trigger: SqsTrigger = self
+            //         .build_spin_trigger(working_dir, app)
+            //         .await
+            //         .context("failed to build spin trigger")?;
+            //
+            //     info!(" >>> running spin trigger");
+            //     sqs_trigger.run(spin_trigger::cli::NoArgs)
+            // }
             _ => {
                 todo!("Only Http, Redis and SQS triggers are currently supported.")
             }
@@ -262,6 +272,7 @@ impl SpinEngine {
         if Path::new(RUNTIME_CONFIG_PATH).exists() {
             runtime_config.merge_config_file(RUNTIME_CONFIG_PATH)?;
         }
+
         let mut builder = TriggerExecutorBuilder::new(loader);
         builder
             .hooks(StdioTriggerHook {})
@@ -271,6 +282,15 @@ impl SpinEngine {
         let init_data = Default::default();
         let executor = builder.build(locked_url, runtime_config, init_data).await?;
         Ok(executor)
+    }
+
+    fn init_telemetry() -> Result<ShutdownGuard> {
+        spin_telemetry::init(
+            ServiceDescription::new("spin", "0.12.0".to_string()),
+            Some(Url::parse("http://localhost:4317")?),
+            true,
+            true,
+        )
     }
 }
 
@@ -334,9 +354,8 @@ fn trigger_command_for_resolved_app_source(resolved: &ResolvedAppSource) -> Resu
     let trigger_type = resolved.trigger_type()?;
 
     match trigger_type {
-        RedisTrigger::TRIGGER_TYPE | HttpTrigger::TRIGGER_TYPE | SqsTrigger::TRIGGER_TYPE => {
-            Ok(trigger_type.to_owned())
-        }
+        // RedisTrigger::TRIGGER_TYPE | HttpTrigger::TRIGGER_TYPE | SqsTrigger::TRIGGER_TYPE => {
+        HttpTrigger::TRIGGER_TYPE => Ok(trigger_type.to_owned()),
         _ => {
             todo!("Only Http, Redis and SQS triggers are currently supported.")
         }
