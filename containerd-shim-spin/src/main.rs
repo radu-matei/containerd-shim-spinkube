@@ -9,7 +9,7 @@ fn main() {
     // TODO: consider supporting some logging once log level specification is
     // supported in https://github.com/containerd/rust-extensions/pull/247
     let shim_config = Config {
-        no_setup_logger: true,
+        no_setup_logger: false,
         ..Default::default()
     };
     shim_main::<Instance<engine::SpinEngine>>(
